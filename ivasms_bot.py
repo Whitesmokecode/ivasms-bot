@@ -24,13 +24,13 @@ def run_flask():
 
 threading.Thread(target=run_flask, daemon=True).start()
 
-# ========== YOUR CREDENTIALS (HARDCODED) ==========
+# ========== YOUR CREDENTIALS ==========
 TELEGRAM_BOT_TOKEN = "8299925576:AAHeRtYSZ1n4HQk35ZmU9L5qB1wzVHxozfU"
 TELEGRAM_GROUP_CHAT_ID = -1003962610348
 IVASMS_EMAIL = "fikolamiobileye22@gmail.com"
 IVASMS_PASSWORD = "O674674fv#"
 CHECK_INTERVAL = 3
-# ==================================================
+# ======================================
 
 class IVASMSBridge:
     def __init__(self):
@@ -57,6 +57,70 @@ class IVASMSBridge:
                     return False
             
             login_data = {'email': IVASMS_EMAIL, 'password': IVASMS_PASSWORD, '_token': csrf_token}
+            async with self.session.post("https://ivasms.com/login", data=login_data, ssl=False, allow_redirects=True) as response:
+                if "dashboard" in response.url.path:
+                    self.is_logged_in = True
+                    await self.bot.send_message(chat_id=TELEGRAM_GROUP_CHAT_ID, 
+                        text=f"🟢 IVASMS Bot Connected\n📧 Account: {IVASMS_EMAIL}\n⏱️ Checking every {CHECK_INTERVAL} seconds",
+                        parse_mode='Markdown')
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"Login error: {e}")
+            return False
+    
+    async def get_messages(self):
+        if not self.is_logged_in:
+            return []
+        try:
+            async with self.session.get("https://ivasms.com/messages", ssl=False) as response:
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
+                messages = []
+                rows = soup.find_all('tr')
+                for row in rows:
+                    cols = row.find_all('td')
+                    if len(cols) >= 2:
+                        sender = cols[0].get_text(strip=True)
+                        msg_text = cols[1].get_text(strip=True)
+                        time = cols[2].get_text(strip=True) if len(cols) > 2 else ""
+                        otp_match = re.search(r'\b(\d{4,6})\b', msg_text)
+                        otp = otp_match.group(1) if otp_match else None
+                        if sender and msg_text:
+                            messages.append({
+                                'sender': sender,
+                                'message': msg_text,
+                                'otp': otp,
+                                'time': time,
+                                'full_text': f"🔐 NEW OTP\n\n📱 From: {sender}\n🔢 OTP: {otp}\n📝 {msg_text}\n🕐 {time}\n\n👉 {otp} 👈"
+                            })
+                return messages
+        except Exception as e:
+            return []
+    
+    async def check_and_forward(self):
+        while True:
+            try:
+                if not self.is_logged_in:
+                    await self.login()
+                messages = await self.get_messages()
+                for msg in messages:
+                    msg_id = f"{msg['sender']}_{msg['time']}"
+                    if msg_id not in self.last_messages:
+                        self.last_messages[msg_id] = msg['full_text']
+                        await self.bot.send_message(chat_id=TELEGRAM_GROUP_CHAT_ID, text=msg['full_text'], parse_mode='Markdown')
+                        logger.info(f"Forwarded OTP from {msg['sender']}")
+                await asyncio.sleep(CHECK_INTERVAL)
+            except Exception as e:
+                logger.error(f"Error: {e}")
+                await asyncio.sleep(10)
+
+async def main():
+    bridge = IVASMSBridge()
+    await bridge.check_and_forward()
+
+if __name__ == "__main__":
+    asyncio.run(main())            login_data = {'email': IVASMS_EMAIL, 'password': IVASMS_PASSWORD, '_token': csrf_token}
             async with self.session.post("https://ivasms.com/login", data=login_data, ssl=False, allow_redirects=True) as response:
                 if "dashboard" in response.url.path:
                     self.is_logged_in = True
